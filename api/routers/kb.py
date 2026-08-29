@@ -9,6 +9,7 @@ api.routers.kb
 """
 import shutil
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
@@ -17,8 +18,20 @@ from sqlalchemy.orm import Session
 from api.api_config import UPLOAD_DIR
 from api.database import get_db
 from api.models import ChatSession, KbDocument, KnowledgeBase
-from api.schemas import SPLITTERS, KbCreate, KbOut, KbUpdate
-from api.services import collection_name_for, drop_kb_collection, get_store
+from api.schemas import (
+    HYBRID_RANKERS,
+    RETRIEVAL_MODES,
+    SPLITTERS,
+    KbCreate,
+    KbOut,
+    KbUpdate,
+)
+from api.services import (
+    collection_name_for,
+    drop_kb_collection,
+    get_store,
+    invalidate_store,
+)
 from api.services.chat_service import chat_service
 from api.user.auth import require_permission
 
@@ -64,6 +77,28 @@ def _validate_splitter(splitter: str) -> str:
     return splitter
 
 
+def _validate_retrieval_config(
+    retrieval_mode: Optional[str] = None, hybrid_ranker: Optional[str] = None
+) -> None:
+    """校验检索方式与融合排序器的合法值(均大小写敏感)。"""
+    if retrieval_mode is not None and retrieval_mode not in RETRIEVAL_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"不支持的检索方式: {retrieval_mode},"
+                f"可选: {', '.join(RETRIEVAL_MODES)}"
+            ),
+        )
+    if hybrid_ranker is not None and hybrid_ranker not in HYBRID_RANKERS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"不支持的融合排序器: {hybrid_ranker},"
+                f"可选: {', '.join(HYBRID_RANKERS)}"
+            ),
+        )
+
+
 @router.get("", response_model=list[KbOut], summary="知识库列表")
 def list_kbs(db: Session = Depends(get_db)):
     kbs = db.query(KnowledgeBase).order_by(KnowledgeBase.id.desc()).all()
@@ -79,6 +114,9 @@ def list_kbs(db: Session = Depends(get_db)):
 )
 def create_kb(payload: KbCreate, db: Session = Depends(get_db)):
     _validate_splitter(payload.splitter)
+    _validate_retrieval_config(
+        retrieval_mode=payload.retrieval_mode, hybrid_ranker=payload.hybrid_ranker
+    )
     if db.query(KnowledgeBase).filter(KnowledgeBase.name == payload.name).first():
         raise HTTPException(status_code=400, detail=f"知识库名称已存在: {payload.name}")
 
@@ -89,6 +127,9 @@ def create_kb(payload: KbCreate, db: Session = Depends(get_db)):
         splitter=payload.splitter,
         chunk_size=payload.chunk_size,
         chunk_overlap=payload.chunk_overlap,
+        retrieval_mode=payload.retrieval_mode,
+        hybrid_ranker=payload.hybrid_ranker,
+        hybrid_ranker_params=payload.hybrid_ranker_params,
     )
     db.add(kb)
     db.commit()
@@ -116,6 +157,11 @@ def update_kb(kb_id: int, payload: KbUpdate, db: Session = Depends(get_db)):
     data = payload.model_dump(exclude_unset=True)
     if "splitter" in data and data["splitter"] is not None:
         _validate_splitter(data["splitter"])
+    if "retrieval_mode" in data or "hybrid_ranker" in data:
+        _validate_retrieval_config(
+            retrieval_mode=data.get("retrieval_mode"),
+            hybrid_ranker=data.get("hybrid_ranker"),
+        )
     if "name" in data and data["name"]:
         exists = (
             db.query(KnowledgeBase)
@@ -130,6 +176,14 @@ def update_kb(kb_id: int, payload: KbUpdate, db: Session = Depends(get_db)):
             setattr(kb, k, v)
     db.commit()
     db.refresh(kb)
+    # 检索配置(retrieval_mode / hybrid_ranker / hybrid_ranker_params)变更时:
+    # 1) 丢弃缓存的 store,下次按新配置重建(融合排序器是 store 级参数);
+    # 2) 使该知识库所有会话的 RAG 引擎失效(检索方式是检索器级参数)。
+    # 注意:dense -> sparse/hybrid 只对新建 collection 生效(稀疏字段无法
+    # 追加到已有 schema),已有数据的知识库需重建后才能用全文检索。
+    if {"retrieval_mode", "hybrid_ranker", "hybrid_ranker_params"} & data.keys():
+        invalidate_store(kb_id)
+        chat_service.invalidate_kb(kb_id)
     return _kb_to_out(db, kb)
 
 

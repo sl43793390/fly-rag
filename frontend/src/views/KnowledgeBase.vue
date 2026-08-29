@@ -32,6 +32,22 @@
             </el-tooltip>
           </template>
         </el-table-column>
+        <el-table-column label="检索方式" width="130">
+          <template #default="{ row }">
+            <el-tooltip
+              v-if="row.retrieval_mode === 'hybrid' && row.hybrid_ranker"
+              :content="`融合排序: ${hybridRankerLabel(row.hybrid_ranker)}`"
+              placement="top"
+            >
+              <el-tag size="small" :type="retrievalModeTag(row.retrieval_mode)">
+                {{ retrievalModeShort(row.retrieval_mode) }}
+              </el-tag>
+            </el-tooltip>
+            <el-tag v-else size="small" :type="retrievalModeTag(row.retrieval_mode)">
+              {{ retrievalModeShort(row.retrieval_mode) }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="文档" width="100" align="center">
           <template #default="{ row }">{{ row.doc_count }} 份</template>
         </el-table-column>
@@ -103,6 +119,48 @@
           <el-input-number v-model="form.chunk_overlap" :min="0" :max="2048" :step="50" />
           <span class="form-tip">相邻块之间的重叠</span>
         </el-form-item>
+        <el-form-item label="检索方式" prop="retrieval_mode">
+          <el-select v-model="form.retrieval_mode" style="width: 100%">
+            <el-option
+              v-for="opt in RETRIEVAL_MODE_OPTIONS"
+              :key="opt.value"
+              :value="opt.value"
+              :label="opt.label"
+            />
+          </el-select>
+          <div v-if="dialog.isEdit" class="form-tip-block">
+            注意:已有文档的知识库从向量检索切换到全文/混合检索时,
+            稀疏全文索引只对之后新上传的文档生效,建议重新上传文档。
+          </div>
+        </el-form-item>
+        <template v-if="form.retrieval_mode === 'hybrid'">
+          <el-form-item label="融合排序" prop="hybrid_ranker">
+            <el-select v-model="form.hybrid_ranker" style="width: 100%">
+              <el-option
+                v-for="opt in HYBRID_RANKER_OPTIONS"
+                :key="opt.value"
+                :value="opt.value"
+                :label="opt.label"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="form.hybrid_ranker === 'RRFRanker'" label="RRF k">
+            <el-input-number v-model="form.rrf_k" :min="1" :max="1000" :step="10" />
+            <span class="form-tip">平滑因子,越大各路排名差异越平滑,默认 60</span>
+          </el-form-item>
+          <el-form-item v-else label="融合权重">
+            <el-input-number v-model="form.weight_dense" :min="0" :max="10" :step="0.1" />
+            <span class="form-tip">向量</span>
+            <el-input-number
+              v-model="form.weight_sparse"
+              :min="0"
+              :max="10"
+              :step="0.1"
+              style="margin-left: 8px"
+            />
+            <span class="form-tip">BM25</span>
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="dialog.visible = false">取消</el-button>
@@ -125,7 +183,16 @@ import {
 } from '@element-plus/icons-vue'
 import { kbApi } from '../api'
 import { authStore as auth } from '../store/auth'
-import { SPLITTER_OPTIONS, formatTime, splitterLabel } from '../utils/format'
+import {
+  HYBRID_RANKER_OPTIONS,
+  RETRIEVAL_MODE_OPTIONS,
+  SPLITTER_OPTIONS,
+  formatTime,
+  hybridRankerLabel,
+  retrievalModeShort,
+  retrievalModeTag,
+  splitterLabel,
+} from '../utils/format'
 
 const router = useRouter()
 const loading = ref(false)
@@ -140,11 +207,38 @@ const form = reactive({
   splitter: 'auto',
   chunk_size: 1024,
   chunk_overlap: 200,
+  retrieval_mode: 'dense',
+  hybrid_ranker: 'RRFRanker',
+  rrf_k: 60,
+  weight_dense: 1.0,
+  weight_sparse: 1.0,
 })
 
 const rules = {
   name: [{ required: true, message: '请输入知识库名称', trigger: 'blur' }],
   chunk_size: [{ required: true, message: '请输入块大小', trigger: 'blur' }],
+}
+
+/** 把表单状态转成后端 KbCreate / KbUpdate 结构(分离排序器参数) */
+function buildPayload() {
+  const payload = {
+    name: form.name,
+    description: form.description,
+    splitter: form.splitter,
+    chunk_size: form.chunk_size,
+    chunk_overlap: form.chunk_overlap,
+    retrieval_mode: form.retrieval_mode,
+    hybrid_ranker: null,
+    hybrid_ranker_params: null,
+  }
+  if (form.retrieval_mode === 'hybrid') {
+    payload.hybrid_ranker = form.hybrid_ranker
+    payload.hybrid_ranker_params =
+      form.hybrid_ranker === 'RRFRanker'
+        ? { k: form.rrf_k }
+        : { weights: [form.weight_dense, form.weight_sparse] }
+  }
+  return payload
 }
 
 async function load() {
@@ -165,6 +259,11 @@ function openCreate() {
     splitter: 'auto',
     chunk_size: 1024,
     chunk_overlap: 200,
+    retrieval_mode: 'dense',
+    hybrid_ranker: 'RRFRanker',
+    rrf_k: 60,
+    weight_dense: 1.0,
+    weight_sparse: 1.0,
   })
   dialog.visible = true
 }
@@ -172,12 +271,18 @@ function openCreate() {
 function openEdit(row) {
   dialog.isEdit = true
   dialog.editId = row.id
+  const params = row.hybrid_ranker_params || {}
   Object.assign(form, {
     name: row.name,
     description: row.description || '',
     splitter: row.splitter,
     chunk_size: row.chunk_size,
     chunk_overlap: row.chunk_overlap,
+    retrieval_mode: row.retrieval_mode || 'dense',
+    hybrid_ranker: row.hybrid_ranker || 'RRFRanker',
+    rrf_k: params.k ?? 60,
+    weight_dense: params.weights?.[0] ?? 1.0,
+    weight_sparse: params.weights?.[1] ?? 1.0,
   })
   dialog.visible = true
 }
@@ -186,11 +291,12 @@ async function onSave() {
   await formRef.value.validate()
   dialog.saving = true
   try {
+    const payload = buildPayload()
     if (dialog.isEdit) {
-      await kbApi.update(dialog.editId, { ...form })
+      await kbApi.update(dialog.editId, payload)
       ElMessage.success('知识库已更新')
     } else {
-      await kbApi.create({ ...form })
+      await kbApi.create(payload)
       ElMessage.success('知识库创建成功,可进入「文档」上传资料')
     }
     dialog.visible = false
@@ -261,6 +367,14 @@ onMounted(load)
 .form-tip {
   margin-left: 10px;
   color: #909399;
+  font-size: 12px;
+}
+
+.form-tip-block {
+  width: 100%;
+  margin-top: 4px;
+  line-height: 1.5;
+  color: #e6a23c;
   font-size: 12px;
 }
 </style>

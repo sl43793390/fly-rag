@@ -111,7 +111,13 @@
                 <el-icon><Clock /></el-icon>
                 <span>历史摘要(已自动压缩)</span>
               </div>
-              <div class="bubble-content">{{ m.content }}</div>
+              <!-- AI 回复/摘要:markdown 渲染;用户消息保持纯文本 -->
+              <div
+                v-if="m.role === 'assistant'"
+                class="bubble-content markdown-body"
+                v-html="renderMarkdown(m.content)"
+              />
+              <div v-else class="bubble-content">{{ m.content }}</div>
               <!-- 引用元数据:文档名称标签 -->
               <div
                 v-if="m.role === 'assistant' && !m.is_summary && m.sources && m.sources.length"
@@ -242,6 +248,16 @@ import {
 import { chatApi, kbApi, promptApi } from '../api'
 import { authStore as auth } from '../store/auth'
 import { formatTime } from '../utils/format'
+import MarkdownIt from 'markdown-it'
+
+// markdown 渲染:默认转义内嵌 HTML(防 XSS);breaks 让单个换行也显示为换行,适合聊天
+const md = new MarkdownIt({ breaks: true, linkify: true })
+
+/** AI 回复 markdown 渲染(v-html 使用);内容为空时返回空串 */
+function renderMarkdown(text) {
+  if (!text) return ''
+  return md.render(text)
+}
 
 const route = useRoute()
 
@@ -800,6 +816,136 @@ onMounted(async () => {
   font-size: 14px;
   line-height: 1.7;
   color: #303133;
+}
+
+/* AI 回复 markdown 渲染样式(v-html 内容无 scoped 属性,需 :deep 穿透) */
+.markdown-body {
+  white-space: normal; /* 覆盖 pre-wrap,块级元素自身控制换行,避免叠加空行 */
+}
+
+.markdown-body :deep(p) {
+  margin: 0 0 8px;
+}
+
+.markdown-body :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3),
+.markdown-body :deep(h4),
+.markdown-body :deep(h5),
+.markdown-body :deep(h6) {
+  margin: 14px 0 8px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.markdown-body :deep(h1) {
+  font-size: 18px;
+}
+
+.markdown-body :deep(h2) {
+  font-size: 17px;
+}
+
+.markdown-body :deep(h3) {
+  font-size: 15px;
+}
+
+.markdown-body :deep(h4),
+.markdown-body :deep(h5),
+.markdown-body :deep(h6) {
+  font-size: 14px;
+}
+
+.markdown-body :deep(h1:first-child),
+.markdown-body :deep(h2:first-child),
+.markdown-body :deep(h3:first-child) {
+  margin-top: 0;
+}
+
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  margin: 0 0 8px;
+  padding-left: 22px;
+}
+
+.markdown-body :deep(li) {
+  margin: 2px 0;
+}
+
+.markdown-body :deep(code) {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f0f2f5;
+  color: #c7254e;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+}
+
+.markdown-body :deep(pre) {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #282c34;
+  overflow-x: auto;
+}
+
+.markdown-body :deep(pre code) {
+  padding: 0;
+  background: transparent;
+  color: #abb2bf;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.markdown-body :deep(blockquote) {
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 3px solid #d9ecff;
+  background: #f8f9fb;
+  color: #606266;
+}
+
+.markdown-body :deep(table) {
+  margin: 8px 0;
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  border: 1px solid #e4e7ed;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.markdown-body :deep(th) {
+  background: #f5f7fa;
+  font-weight: 600;
+}
+
+.markdown-body :deep(a) {
+  color: var(--el-color-primary, #409eff);
+  text-decoration: none;
+}
+
+.markdown-body :deep(a:hover) {
+  text-decoration: underline;
+}
+
+.markdown-body :deep(img) {
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+.markdown-body :deep(hr) {
+  border: none;
+  border-top: 1px solid #e4e7ed;
+  margin: 12px 0;
 }
 
 /* 打字动画 */

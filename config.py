@@ -10,7 +10,7 @@ config
 """
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Dict, List
 
 
 def _env(key: str, default: str) -> str:
@@ -25,6 +25,29 @@ def _env(key: str, default: str) -> str:
         环境变量值或默认值。
     """
     return os.environ.get(key, default)
+
+
+def _env_json(key: str, default) -> dict:
+    """
+    读取 JSON 格式的环境变量(用于 dict / list 类配置),缺失或非法时返回默认值。
+
+    Args:
+        key: 环境变量名。
+        default: 默认值(dict)。
+
+    Returns:
+        解析后的 dict,解析失败时回落默认值。
+    """
+    import json
+
+    raw = os.environ.get(key)
+    if not raw:
+        return default
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else default
+    except (ValueError, TypeError):
+        return default
 
 
 @dataclass
@@ -61,8 +84,17 @@ class LLMConfig:
 
 @dataclass
 class MilvusConfig:
-    """Milvus 向量库配置。"""
+    """Milvus 向量库配置。
 
+    分为四组:
+    1. 连接: uri / token / collection_name / overwrite;
+    2. Schema 字段名: 向量字段 / 稀疏字段 / 文本字段 / doc_id 字段;
+    3. 索引与度量: 密集索引类型 / 参数 / 相似度度量 / 稀疏索引;
+    4. 混合检索(BM25 全文检索,需 Milvus 2.5+ 服务端):
+       enable_hybrid / 分词器 / 融合排序器及参数 / 一致性级别。
+    """
+
+    # ---------- 1. 连接 ----------
     #: Milvus 连接字符串。
     #: 嵌入式模式:本地文件路径,如 ``./milvus.db``。
     #: 集群/单机模式:服务器地址,如 ``http://localhost:19530``。
@@ -73,6 +105,64 @@ class MilvusConfig:
     collection_name: str = field(default_factory=lambda: _env("MILVUS_COLLECTION", "llamaindex_rag"))
     #: 是否每次启动覆盖已有 collection。
     overwrite: bool = field(default_factory=lambda: _env("MILVUS_OVERWRITE", "true").lower() == "true")
+    #: 一致性级别(Bounded / Session / Strong / Eventually)。
+    #: 写入后立即检索的场景建议 Strong 或 Bounded,避免新文档查不到。
+    consistency_level: str = field(default_factory=lambda: _env("MILVUS_CONSISTENCY_LEVEL", "Session"))
+
+    # ---------- 2. Schema 字段名 ----------
+    #: 稠密向量字段名。
+    vector_field: str = field(default_factory=lambda: _env("MILVUS_VECTOR_FIELD", "embedding"))
+    #: 稀疏向量字段名(BM25 Function 的输出字段)。
+    sparse_vector_field: str = field(default_factory=lambda: _env("MILVUS_SPARSE_VECTOR_FIELD", "sparse_embedding"))
+    #: 原文文本字段名(节点正文存放字段,同时也是 BM25 的输入字段)。
+    text_field: str = field(default_factory=lambda: _env("MILVUS_TEXT_FIELD", "text"))
+    #: 文档 id 字段名(llama-index 用于按 ref_doc_id 删除节点)。
+    doc_id_field: str = field(default_factory=lambda: _env("MILVUS_DOC_ID_FIELD", "doc_id"))
+    #: 是否允许动态字段(未在 schema 中声明的 metadata 键自动建列)。
+    #: 注意:当前 llama-index-vector-stores-milvus 1.1.0 建表固定 enable_dynamic_field=True,
+    #: 该配置用于显式表达意图,自建 schema / 升级库版本时生效。
+    enable_dynamic_field: bool = field(
+        default_factory=lambda: _env("MILVUS_ENABLE_DYNAMIC_FIELD", "true").lower() == "true"
+    )
+
+    # ---------- 3. 索引与度量 ----------
+    #: 稠密向量相似度度量类型: IP(内积) / COSINE(余弦) / L2(欧氏)。
+    #: 使用 OpenAI 兼容 embedding 时 COSINE 更通用;为兼容历史 collection 默认 IP。
+    similarity_metric: str = field(default_factory=lambda: _env("MILVUS_SIMILARITY_METRIC", "IP"))
+    #: 稠密向量索引类型: FLAT / AUTOINDEX / HNSW / IVF_FLAT / DISKANN 等。
+    index_type: str = field(default_factory=lambda: _env("MILVUS_INDEX_TYPE", "FLAT"))
+    #: 稠密索引构建参数(随 index_type 变化):
+    #:   HNSW -> {"M": 24, "efConstruction": 360};IVF_FLAT -> {"nlist": 1024}。
+    index_params: Dict[str, float] = field(default_factory=lambda: _env_json("MILVUS_INDEX_PARAMS", {}))
+    #: 稠密检索参数(随 index_type 变化): HNSW -> {"ef": 128};IVF -> {"nprobe": 16}。
+    search_params: Dict[str, float] = field(default_factory=lambda: _env_json("MILVUS_SEARCH_PARAMS", {}))
+    #: 稀疏向量索引类型(BM25 稀疏向量固定用 SPARSE_INVERTED_INDEX / SPARSE_WAND)。
+    sparse_index_type: str = field(default_factory=lambda: _env("MILVUS_SPARSE_INDEX_TYPE", "SPARSE_INVERTED_INDEX"))
+    #: 稀疏索引构建参数,如 {"drop_ratio_build": 0.2}(构建时丢弃最小权重,省内存)。
+    sparse_index_params: Dict[str, float] = field(
+        default_factory=lambda: _env_json("MILVUS_SPARSE_INDEX_PARAMS", {})
+    )
+
+    # ---------- 4. 混合检索(BM25 全文检索) ----------
+    #: 是否启用混合检索:True 时 collection 建表带稀疏向量字段 + BM25 Function,
+    #: Milvus 2.5+ 在写入时自动把文本转稀疏向量、查询时自动分词,无需自备稀疏模型。
+    #: 关闭后仅稠密检索(旧 collection / 低版本服务端兼容)。
+    enable_hybrid: bool = field(default_factory=lambda: _env("MILVUS_ENABLE_HYBRID", "true").lower() == "true")
+    #: BM25 分词器类型: jieba(中文词典分词,Milvus 全版本支持,推荐) / standard(标准分词)。
+    #: 注意:milvus-lite / 部分版本服务端不支持 "chinese" 类型,
+    #: 支持集以服务端为准(报错 unknown tokenizer type 时按提示调整)。
+    analyzer_type: str = field(default_factory=lambda: _env("MILVUS_ANALYZER_TYPE", "jieba"))
+    #: 默认融合排序器: RRFRanker(对量纲不敏感,推荐) / WeightedRanker(需归一化)。
+    hybrid_ranker: str = field(default_factory=lambda: _env("MILVUS_HYBRID_RANKER", "RRFRanker"))
+    #: 融合排序器参数:
+    #:   RRFRanker -> {"k": 60};WeightedRanker -> {"weights": [0.7, 0.3]}(稠密, 稀疏)。
+    hybrid_ranker_params: Dict[str, object] = field(
+        default_factory=lambda: _env_json("MILVUS_HYBRID_RANKER_PARAMS", {"k": 60})
+    )
+    #: 稀疏检索参数,如 {"drop_ratio_search": 0.2}(查询时丢弃最小权重,提效)。
+    sparse_search_params: Dict[str, float] = field(
+        default_factory=lambda: _env_json("MILVUS_SPARSE_SEARCH_PARAMS", {})
+    )
 
 
 @dataclass

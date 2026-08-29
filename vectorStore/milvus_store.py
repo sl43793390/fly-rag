@@ -108,15 +108,39 @@ def configure_settings(
 # ============================================================
 # Milvus 客户端
 # ============================================================
+def _bm25_sparse_function():
+    """
+    构造 Milvus 2.5 内置 BM25 Function(稀疏向量化由服务端完成,免训练模型)。
+
+    - 输入字段: ``config.MILVUS.text_field``(节点正文);
+    - 输出字段: ``config.MILVUS.sparse_vector_field``;
+    - 分词器: ``config.MILVUS.analyzer_type``(默认 jieba,中文场景推荐;
+      milvus-lite 仅支持 standard/jieba,不支持 "chinese")。
+
+    Returns:
+        ``BM25BuiltInFunction`` 实例(pymilvus Function 的 BM25 封装)。
+    """
+    from llama_index.vector_stores.milvus.utils import BM25BuiltInFunction
+
+    return BM25BuiltInFunction(
+        input_field_names=MILVUS.text_field,
+        output_field_names=MILVUS.sparse_vector_field,
+        analyzer_params={"type": MILVUS.analyzer_type},
+    )
+
+
 def build_milvus_store(
     uri: Optional[str] = None,
     token: Optional[str] = None,
     collection_name: Optional[str] = None,
     dim: Optional[int] = None,
     overwrite: Optional[bool] = None,
+    enable_hybrid: Optional[bool] = None,
+    hybrid_ranker: Optional[str] = None,
+    hybrid_ranker_params: Optional[dict] = None,
 ) -> MilvusVectorStore:
     """
-    构造 Milvus 向量库客户端。
+    构造 Milvus 向量库客户端(支持 BM25 全文检索混合模式)。
 
     Args:
         uri:
@@ -126,26 +150,63 @@ def build_milvus_store(
         collection_name: 集合(表)名。
         dim: 向量维度,需与 Embedding 模型一致。
         overwrite: True 时会清空已存在集合;为 None 时从 ``config.MILVUS.overwrite`` 读取。
+        enable_hybrid: 是否启用混合检索(BM25 Function 全文检索,需 Milvus 2.5+ 服务端);
+            为 None 时从 ``config.MILVUS.enable_hybrid`` 读取。启用后建表会附带
+            稀疏向量字段,写入时由 Milvus 服务端自动生成稀疏向量。
+        hybrid_ranker: 融合排序器 ``"RRFRanker"`` / ``"WeightedRanker"``;None 时读配置。
+        hybrid_ranker_params: 排序器参数(RRF ``{"k": 60}`` / Weighted
+            ``{"weights": [0.7, 0.3]}``);None 时读配置。
 
     Returns:
         配置好的 ``MilvusVectorStore`` 实例。
 
     Note:
-        必须显式传 ``output_fields=["text", "_node_content", "_node_type"]``。
-        - ``text``: 保证检索出来的节点 text 不为空;
-        - ``_node_content`` / ``_node_type``: 让 llama-index 检索时能
-          ``metadata_dict_to_node`` 还原完整节点(含 file_name / section 等
-          入库时写入的元数据),否则前端引用与发给 LLM 的来源信息会丢失。
+        - 必须显式传 ``output_fields=["text", "_node_content", "_node_type"]``。
+          ``text`` 保证检索出来的节点 text 不为空;``_node_content`` / ``_node_type``
+          让 llama-index 检索时能还原完整节点(含 file_name / section 等元数据)。
+        - 混合模式下 schema 由 MilvusVectorStore 自动创建:BM25 的输入是 text 字段,
+          输出写入稀疏字段;已有 collection(无稀疏字段)时不要开启,否则查询会报
+          字段不存在。
     """
-    return MilvusVectorStore(
+    use_hybrid = MILVUS.enable_hybrid if enable_hybrid is None else enable_hybrid
+
+    params: dict = dict(
         uri=uri if uri is not None else MILVUS.uri,
         token=token if token is not None else MILVUS.token,
         collection_name=collection_name if collection_name is not None else MILVUS.collection_name,
         dim=dim if dim is not None else EMBED.dim,
         overwrite=overwrite if overwrite is not None else MILVUS.overwrite,
         # 关键:text + 节点序列化字段,保证检索能拿到内容与完整元数据
-        output_fields=["text", "_node_content", "_node_type"],
+        output_fields=[MILVUS.text_field, "_node_content", "_node_type"],
+        # 字段名(与 config.MILVUS 对齐,可定制)
+        embedding_field=MILVUS.vector_field,
+        text_key=MILVUS.text_field,
+        doc_id_field=MILVUS.doc_id_field,
+        # 度量 / 索引 / 检索参数
+        similarity_metric=MILVUS.similarity_metric,
+        consistency_level=MILVUS.consistency_level,
+        index_config={"index_type": MILVUS.index_type, **MILVUS.index_params},
+        search_config=dict(MILVUS.search_params),
     )
+
+    if use_hybrid:
+        params.update(
+            enable_sparse=True,
+            sparse_embedding_field=MILVUS.sparse_vector_field,
+            sparse_embedding_function=_bm25_sparse_function(),
+            # 稀疏索引:SPARSE_INVERTED_INDEX(+ drop_ratio_build 等构建参数)
+            sparse_index_config={
+                "index_type": MILVUS.sparse_index_type,
+                **MILVUS.sparse_index_params,
+            },
+            # 库内融合排序:RRFRanker / WeightedRanker
+            hybrid_ranker=hybrid_ranker or MILVUS.hybrid_ranker,
+        )
+        ranker_params = hybrid_ranker_params or MILVUS.hybrid_ranker_params
+        if ranker_params:
+            params["hybrid_ranker_params"] = ranker_params
+
+    return MilvusVectorStore(**params)
 
 
 # ============================================================

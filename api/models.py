@@ -37,6 +37,20 @@ class KnowledgeBase(Base):
     splitter = Column(String(32), nullable=False, default="auto", server_default="auto")
     chunk_size = Column(Integer, nullable=False, default=1024, server_default="1024")
     chunk_overlap = Column(Integer, nullable=False, default=200, server_default="200")
+    #: 检索方式: dense(仅向量) / sparse(仅 BM25 全文) / hybrid(稠密+BM25 融合)
+    retrieval_mode = Column(
+        String(16),
+        nullable=False,
+        default="dense",
+        server_default="dense",
+        comment="检索方式: dense/sparse/hybrid",
+    )
+    #: 融合排序器(retrieval_mode=hybrid 时生效): RRFRanker / WeightedRanker
+    hybrid_ranker = Column(
+        String(16), nullable=True, comment="混合检索融合排序: RRFRanker/WeightedRanker"
+    )
+    #: 融合排序参数: RRFRanker -> {"k": 60}; WeightedRanker -> {"weights": [1.0, 1.0]}
+    hybrid_ranker_params = Column(JSON, nullable=True, comment="融合排序参数")
     created_at = Column(DateTime, default=datetime.now, server_default=func.now())
     updated_at = Column(
         DateTime, default=datetime.now, onupdate=datetime.now, server_default=func.now()

@@ -47,3 +47,36 @@ export function splitterLabel(v) {
   const hit = SPLITTER_OPTIONS.find((o) => o.value === v)
   return hit ? hit.label : v
 }
+
+/** 检索方式选项(与后端 schemas.RETRIEVAL_MODES 对齐) */
+export const RETRIEVAL_MODE_OPTIONS = [
+  { value: 'dense', label: '向量检索(语义相似度)' },
+  { value: 'sparse', label: '全文检索(BM25 关键词)' },
+  { value: 'hybrid', label: '混合检索(向量 + BM25 融合)' },
+]
+
+export function retrievalModeLabel(v) {
+  const hit = RETRIEVAL_MODE_OPTIONS.find((o) => o.value === v)
+  return hit ? hit.label : v
+}
+
+/** 检索方式标签颜色 */
+export function retrievalModeTag(v) {
+  return { dense: 'info', sparse: 'warning', hybrid: 'success' }[v] || 'info'
+}
+
+/** 检索方式短标签(表格展示用) */
+export function retrievalModeShort(v) {
+  return { dense: '向量检索', sparse: '全文检索', hybrid: '混合检索' }[v] || v
+}
+
+/** 混合检索融合排序器(与 Milvus 保留值一致,大小写敏感) */
+export const HYBRID_RANKER_OPTIONS = [
+  { value: 'RRFRanker', label: 'RRF 倒数排名融合(推荐)' },
+  { value: 'WeightedRanker', label: '加权求和融合' },
+]
+
+export function hybridRankerLabel(v) {
+  const hit = HYBRID_RANKER_OPTIONS.find((o) => o.value === v)
+  return hit ? hit.label : v
+}

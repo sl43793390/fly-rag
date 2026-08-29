@@ -179,50 +179,43 @@ def demo_with_milvus_index() -> None:
 # ============================================================
 def demo_milvus_native_hybrid() -> None:
     """
-    用 Milvus 2.4+ 的"双向量字段"做原生混合检索。
+    用 Milvus 2.5 内置 BM25 Function 做服务端混合检索(免训练稀疏模型)。
 
     适用:
-        - 数据量 > 10w 节点,需要 Milvus 内部的 ANN 性能
-        - 有 BGE-M3 / SPLADE-V2 之类的稀疏向量化函数
-        - 想一次 search 出混合结果,不在 Python 层做 RRF
+        - 数据量大,需要 Milvus 内部的 ANN / 全文检索性能
+        - 不想自己维护稀疏向量化模型(BGE-M3 / SPLADE 等)
 
     关键点:
-        - ``enable_sparse=True`` + ``sparse_embedding_function=...``
-        - ``hybrid_ranker="rrf"`` / ``"weighted"``
-        - ``MilvusHybridRetriever`` 是薄包装,接口和 ``VectorRetriever`` 一样
+        - 建表 schema 自动附带稀疏字段 + BM25 Function(text 字段中文分词,
+          稀疏向量由服务端写入时生成,客户端无需编码)
+        - ``hybrid_ranker`` 必须是 ``"RRFRanker"`` / ``"WeightedRanker"``
+          (大小写敏感)
+        - ``MilvusHybridRetriever(mode="hybrid")`` 必须显式声明查询模式,
+          否则默认走纯稠密检索;接口和 ``VectorRetriever`` 一样
     """
     print("=" * 70)
-    print("Demo 3: Milvus 原生混合检索(稠密 + 稀疏)")
+    print("Demo 3: Milvus 原生混合检索(稠密 + BM25 全文)")
     print("=" * 70)
 
     from config import EMBED
     from hybridRetriever.milvus_hybrid import build_milvus_hybrid_store
-    from llama_index.core.indices.vector_store import VectorStoreIndex
-
-    # 真实项目里 sparse_embedding_function 用 BGE-M3 之类
-    # 这里给个占位(返回 {token: weight} dict 即可)
-    def fake_sparse_fn(texts):
-        return [{t: 1.0 for t in (tx or "").split()[:5]} for tx in texts]
+    from llama_index.core import StorageContext
 
     store = build_milvus_hybrid_store(
         collection_name="hybrid_demo",
         dim=EMBED.dim,
-        sparse_embedding_function=fake_sparse_fn,
-        hybrid_ranker="rrf",
+        hybrid_ranker="RRFRanker",
         hybrid_ranker_params={"k": 60},
         overwrite=True,
     )
     nodes = _to_nodes(SAMPLE_DOCS)
-    index = VectorStoreIndex(nodes=nodes, storage_context=None)
-    # 把 storage 绑到自定义 store
-    from llama_index.core import StorageContext
     index = VectorStoreIndex(
         nodes=nodes,
         storage_context=StorageContext.from_defaults(vector_store=store),
     )
-    print(f"  Milvus 混合 collection 已创建(overwrite=True)")
+    print("  Milvus 混合 collection 已创建(overwrite=True,BM25 服务端稀疏)")
 
-    retriever = MilvusHybridRetriever(index, similarity_top_k=5)
+    retriever = MilvusHybridRetriever(index, similarity_top_k=5, mode="hybrid")
     for q in ["Milvus 混合检索", "BM25"]:
         _print_hits(f"Q: {q}", retriever.retrieve(q, top_k=5))
 

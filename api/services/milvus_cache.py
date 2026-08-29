@@ -79,9 +79,37 @@ def collection_name_for(kb_id: int) -> str:
     return f"kb_{kb_id}"
 
 
+def get_kb_retrieval_config(kb_id: int) -> dict:
+    """
+    查询知识库的检索配置(retrieval_mode / hybrid_ranker / hybrid_ranker_params)。
+
+    知识库不存在或字段为空时返回空 dict,由调用方回落默认值(dense + 全局配置)。
+    """
+    from api.database import SessionLocal
+    from api.models import KnowledgeBase
+
+    db = SessionLocal()
+    try:
+        kb = db.get(KnowledgeBase, kb_id)
+        if kb is None:
+            return {}
+        return {
+            "retrieval_mode": kb.retrieval_mode,
+            "hybrid_ranker": kb.hybrid_ranker,
+            "hybrid_ranker_params": kb.hybrid_ranker_params,
+        }
+    finally:
+        db.close()
+
+
 def get_store(kb_id: int) -> MilvusVectorStore:
     """
     获取(或创建)某个知识库对应的 MilvusVectorStore。
+
+    store 按知识库配置的检索方式(retrieval_mode)构建:
+        - ``dense``  : 纯稠密向量 schema;
+        - ``sparse`` / ``hybrid`` : schema 附带 BM25 稀疏字段(两者 schema 相同,
+          仅查询路径不同,故建 store 时统一开启 enable_sparse)。
 
     Args:
         kb_id: 知识库 id。
@@ -93,10 +121,40 @@ def get_store(kb_id: int) -> MilvusVectorStore:
     with _lock:
         store = _stores.get(cname)
         if store is None:
+            cfg = get_kb_retrieval_config(kb_id)
+            mode = cfg.get("retrieval_mode") or "dense"
             # overwrite=False:collection 不存在时首次写入自动创建,存在时绝不覆盖
-            store = build_milvus_store(collection_name=cname, overwrite=False)
+            store = build_milvus_store(
+                collection_name=cname,
+                overwrite=False,
+                enable_hybrid=mode in ("sparse", "hybrid"),
+                hybrid_ranker=cfg.get("hybrid_ranker"),
+                hybrid_ranker_params=cfg.get("hybrid_ranker_params"),
+            )
             _stores[cname] = store
         return store
+
+
+def invalidate_store(kb_id: int) -> None:
+    """
+    丢弃某知识库缓存的 MilvusVectorStore(检索配置变更后调用)。
+
+    下次 :func:`get_store` 会按新的检索配置重建 store。
+
+    Note:
+        Milvus 不支持对已有 collection 增删字段:检索方式变更只对"新建的
+        collection"生效。已有数据的知识库从 dense 切到 sparse/hybrid 时,
+        需要删除重建知识库(或清空文档重新上传)后,新 schema 才会带上
+        BM25 稀疏字段。
+    """
+    cname = collection_name_for(kb_id)
+    with _lock:
+        store = _stores.pop(cname, None)
+    if store is not None:
+        try:
+            store.client.close()
+        except Exception:  # noqa: BLE001 - 关闭失败不阻断流程
+            pass
 
 
 def ensure_loaded(kb_id: int) -> None:

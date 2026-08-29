@@ -13,6 +13,12 @@ SPLITTERS = [
     "auto", "sentence", "text", "paragraph", "token", "simple", "markdown", "html", "json",
 ]
 
+#: 支持的检索方式
+RETRIEVAL_MODES = ["dense", "sparse", "hybrid"]
+
+#: 支持的混合检索融合排序器(Milvus hybrid search,大小写敏感)
+HYBRID_RANKERS = ["RRFRanker", "WeightedRanker"]
+
 
 # ------------------------------------------------------------
 # 知识库
@@ -23,6 +29,15 @@ class KbCreate(BaseModel):
     splitter: str = Field("auto", description="切分器类型")
     chunk_size: int = Field(1024, ge=100, le=8192)
     chunk_overlap: int = Field(200, ge=0, le=2048)
+    retrieval_mode: str = Field(
+        "dense", description="检索方式: dense(向量)/sparse(BM25 全文)/hybrid(融合)"
+    )
+    hybrid_ranker: Optional[str] = Field(
+        None, description="融合排序器: RRFRanker/WeightedRanker(仅 hybrid 生效,空则用全局默认)"
+    )
+    hybrid_ranker_params: Optional[dict] = Field(
+        None, description="融合排序参数: RRF -> {k:60}; Weighted -> {weights:[1.0,1.0]}"
+    )
 
 
 class KbUpdate(BaseModel):
@@ -31,6 +46,9 @@ class KbUpdate(BaseModel):
     splitter: Optional[str] = None
     chunk_size: Optional[int] = Field(None, ge=100, le=8192)
     chunk_overlap: Optional[int] = Field(None, ge=0, le=2048)
+    retrieval_mode: Optional[str] = None
+    hybrid_ranker: Optional[str] = None
+    hybrid_ranker_params: Optional[dict] = None
 
 
 class KbOut(BaseModel):
@@ -41,6 +59,9 @@ class KbOut(BaseModel):
     splitter: str
     chunk_size: int
     chunk_overlap: int
+    retrieval_mode: str = "dense"
+    hybrid_ranker: Optional[str] = None
+    hybrid_ranker_params: Optional[dict] = None
     doc_count: int = 0
     done_doc_count: int = 0
     node_count: int = 0

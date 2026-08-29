@@ -44,6 +44,23 @@ def get_db():
 # ============================================================
 #: 表名 -> [(列名, DDL 片段)] 新增列(若不存在)
 _SCHEMA_PATCHES = {
+    "knowledge_base": [
+        (
+            "retrieval_mode",
+            "retrieval_mode VARCHAR(16) NOT NULL DEFAULT 'dense' "
+            "COMMENT '检索方式: dense(向量)/sparse(BM25 全文)/hybrid(融合)'",
+        ),
+        (
+            "hybrid_ranker",
+            "hybrid_ranker VARCHAR(16) NULL "
+            "COMMENT '混合检索融合排序: RRFRanker/WeightedRanker(hybrid 时生效)'",
+        ),
+        (
+            "hybrid_ranker_params",
+            "hybrid_ranker_params JSON NULL "
+            "COMMENT '融合排序参数: RRF -> {k:60}; Weighted -> {weights:[1.0,1.0]}'",
+        ),
+    ],
     "chat_session": [
         ("owner_id", "owner_id BIGINT NULL COMMENT '会话所有者(用户 id,可空为匿名会话)'"),
         ("mode", "mode VARCHAR(16) NOT NULL DEFAULT 'rag' COMMENT '会话模式: rag/chat'"),

@@ -29,7 +29,11 @@ from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.schema import NodeWithScore
 
 from api.database import SessionLocal
-from api.services.milvus_cache import ensure_loaded, get_store
+from api.services.milvus_cache import (
+    ensure_loaded,
+    get_kb_retrieval_config,
+    get_store,
+)
 from config import CHAT
 from vectorStore.custom_engine import (
     CustomRAGChatEngine,
@@ -210,16 +214,31 @@ class ChatService:
     ) -> CustomRAGChatEngine:
         """构建 RAG 引擎:Milvus 检索器 + 历史记忆 + 知识库限定提示词。
 
+        - 检索方式由知识库配置决定(dense / sparse / hybrid),见
+          :func:`api.services.milvus_cache.get_kb_retrieval_config`;
         - system / user 双层严格提示词,限定只基于检索内容回答;
         - ``min_score`` 过滤低相关节点:知识库外的问题检索不到有效资料,
           LLM 只能看到"(无参考资料)"并按模板拒绝作答,而不是自由发挥。
         """
+        # 按知识库配置的检索方式构建检索器(默认 dense 纯向量)
+        mode = get_kb_retrieval_config(kb_id).get("retrieval_mode") or "dense"
+        retriever_kwargs: dict = {"similarity_top_k": CHAT.similarity_top_k}
+        if mode in ("hybrid", "sparse"):
+            # 关键:必须显式声明查询模式,否则 MilvusVectorStore 默认走纯稠密
+            # 检索,BM25 稀疏通道完全不参与
+            retriever_kwargs["vector_store_query_mode"] = mode
         retriever = VectorStoreIndex.from_vector_store(
             vector_store=get_store(kb_id)
-        ).as_retriever(similarity_top_k=CHAT.similarity_top_k)
+        ).as_retriever(**retriever_kwargs)
         memory = ChatMemoryBuffer.from_defaults(
             chat_history=history, token_limit=CHAT.memory_token_limit
         )
+        # 分数量纲:dense 相似度(约 0~1)可用绝对阈值过滤;
+        # sparse 的 BM25 原始分 / hybrid 的 RRF 融合分与相似度不同量纲,
+        # 不适用绝对阈值,这两种模式下禁用 min_score,避免把全部结果误杀。
+        min_score = CHAT.min_score or None
+        if mode in ("hybrid", "sparse"):
+            min_score = None
         return CustomRAGChatEngine(
             retriever=retriever,
             llm=Settings.llm,
@@ -228,7 +247,7 @@ class ChatService:
                 kb_name=kb_name or f"#{kb_id}"
             ),
             context_template=KB_RAG_CONTEXT_TEMPLATE,
-            min_score=CHAT.min_score or None,
+            min_score=min_score,
         )
 
     def _build_simple_engine(

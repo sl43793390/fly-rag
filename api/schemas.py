@@ -13,8 +13,8 @@ SPLITTERS = [
     "auto", "sentence", "text", "paragraph", "token", "simple", "markdown", "html", "json",
 ]
 
-#: 支持的检索方式
-RETRIEVAL_MODES = ["dense", "sparse", "hybrid"]
+#: 支持的检索方式(parent_child = 父子检索:层级小块向量命中,自动合并父块上下文)
+RETRIEVAL_MODES = ["dense", "sparse", "hybrid", "parent_child"]
 
 #: 支持的混合检索融合排序器(Milvus hybrid search,大小写敏感)
 HYBRID_RANKERS = ["RRFRanker", "WeightedRanker"]
@@ -30,7 +30,11 @@ class KbCreate(BaseModel):
     chunk_size: int = Field(1024, ge=100, le=8192)
     chunk_overlap: int = Field(200, ge=0, le=2048)
     retrieval_mode: str = Field(
-        "dense", description="检索方式: dense(向量)/sparse(BM25 全文)/hybrid(融合)"
+        "dense",
+        description=(
+            "检索方式: dense(向量)/sparse(BM25 全文)/hybrid(融合)/"
+            "parent_child(父子检索,小块命中自动合并父块)"
+        ),
     )
     hybrid_ranker: Optional[str] = Field(
         None, description="融合排序器: RRFRanker/WeightedRanker(仅 hybrid 生效,空则用全局默认)"

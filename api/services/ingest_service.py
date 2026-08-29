@@ -113,26 +113,54 @@ def _ingest_document(doc_id: int) -> None:
             meta.setdefault("file_path", doc.file_path or "")
             d.metadata = meta
 
-        # 3) 切分
-        nodes = auto_split(
-            docs,
-            doc_type=doc_type,
-            chunk_size=doc.chunk_size,
-            chunk_overlap=doc.chunk_overlap,
-        )
+        # 3) 切分(父子检索走层级切分,其余按类型走常规切分)
+        all_nodes = None
+        if kb.retrieval_mode == "parent_child":
+            from advancedSplitter.parent_child import (
+                hierarchical_chunk_sizes,
+                split_parent_child,
+            )
+
+            # 知识库 chunk_size 即父块大小,按 16:4:1 推导三层粒度
+            sizes, overlap = hierarchical_chunk_sizes(doc.chunk_size, doc.chunk_overlap)
+            all_nodes, nodes = split_parent_child(
+                docs, chunk_sizes=sizes, chunk_overlap=overlap
+            )
+        else:
+            nodes = auto_split(
+                docs,
+                doc_type=doc_type,
+                chunk_size=doc.chunk_size,
+                chunk_overlap=doc.chunk_overlap,
+            )
         if not nodes:
             _mark_failed(doc_id, "切分后无节点")
             return
 
-        # 2.1) 为每个节点附加文档元数据(文件名 / 路径 / 章节),供检索引用
-        _enrich_node_metadata(nodes, doc)
+        # 3.1) 为节点附加文档元数据(文件名 / 路径 / 章节),供检索引用。
+        # 父子检索需增强全部层级节点:父块合并进上下文时也要带出引用来源。
+        _enrich_node_metadata(all_nodes if all_nodes is not None else nodes, doc)
 
-        # 3) 写入该知识库的 collection
+        # 3.2) 写入该知识库的存储
         store = get_store(doc.kb_id)
-        index = VectorStoreIndex.from_vector_store(vector_store=store)
-        index.insert_nodes(nodes)
+        if all_nodes is not None:
+            # 父子检索:全量节点入 Docstore(父/中块供合并回查),
+            # 仅叶子节点 Embedding 后入 Milvus(向量检索)
+            from advancedSplitter.parent_child import insert_parent_child_nodes
+            from api.services.docstore_cache import get_docstore, persist_docstore
 
-        # 4) 状态回写
+            insert_parent_child_nodes(
+                all_nodes,
+                nodes,
+                milvus_store=store,
+                docstore=get_docstore(doc.kb_id),
+            )
+            persist_docstore(doc.kb_id)
+        else:
+            index = VectorStoreIndex.from_vector_store(vector_store=store)
+            index.insert_nodes(nodes)
+
+        # 4) 状态回写(node_count 为 Milvus 中的叶子节点数)
         doc.status = "done"
         doc.node_count = len(nodes)
         db.commit()

@@ -28,14 +28,21 @@ from api.schemas import (
 )
 from api.services import (
     collection_name_for,
+    delete_docstore,
     drop_kb_collection,
     get_store,
     invalidate_store,
 )
 from api.services.chat_service import chat_service
-from api.user.auth import require_permission
+from api.user.auth import get_current_user, require_permission
 
-router = APIRouter(prefix="/api/kb", tags=["知识库"])
+#: 全组路由强制登录:未登录/token 失效(如服务重启)一律 401,
+#: 前端据此跳转登录页;create/delete 再叠加细粒度权限校验。
+router = APIRouter(
+    prefix="/api/kb",
+    tags=["知识库"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 def _kb_stats(db: Session, kb_id: int) -> dict:
@@ -197,8 +204,9 @@ def delete_kb(kb_id: int, db: Session = Depends(get_db)):
     if kb is None:
         raise HTTPException(status_code=404, detail="知识库不存在")
 
-    # 1) 删 Milvus collection
+    # 1) 删 Milvus collection + 父子检索 Docstore(父/中块节点)
     drop_kb_collection(kb_id)
+    delete_docstore(kb_id)
     # 2) 使该知识库下所有会话的引擎缓存失效
     chat_service.invalidate_kb(kb_id)
     # 3) 删上传目录

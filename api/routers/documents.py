@@ -24,11 +24,17 @@ from api.database import get_db
 from api.models import KbDocument, KnowledgeBase
 from api.schemas import SPLITTERS, DocumentOut, UploadResult
 from api.services import submit_ingest
+from api.user.auth import get_current_user
 from dataLoader.loaders import SUPPORTED_EXTS
 
 logger = logging.getLogger("api.documents")
 
-router = APIRouter(prefix="/api/kb", tags=["文档"])
+#: 全组路由强制登录(上传 / 列表 / 删除 / 重试都需有效 token)
+router = APIRouter(
+    prefix="/api/kb",
+    tags=["文档"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 def _get_kb_or_404(db: Session, kb_id: int) -> KnowledgeBase:
@@ -143,12 +149,23 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
     if doc is None:
         raise HTTPException(status_code=404, detail="文档不存在")
 
-    # 1) 从 Milvus 删除该文档的所有节点(按 ref_doc_id)
+    # 1) 从 Milvus 删除该文档的所有节点(按 ref_doc_id);
+    #    父子检索知识库(已存在 Docstore)时,同步删除 Docstore 中的
+    #    父/中块节点(Milvus 只存叶子,父块在 Docstore)
+    from api.services import docstore_exists, get_docstore, persist_docstore
+    from advancedSplitter.parent_child import delete_parent_child_nodes
+
     store = get_store(doc.kb_id)
-    try:
-        store.delete(ref_doc_id=f"doc_{doc.id}")
-    except Exception as e:  # noqa: BLE001 - collection 不存在等情况不阻断删除
-        logger.warning("删除 Milvus 节点失败(可能集合为空): %s", e)
+    if docstore_exists(doc.kb_id):
+        delete_parent_child_nodes(
+            store, get_docstore(doc.kb_id), ref_doc_id=f"doc_{doc.id}"
+        )
+        persist_docstore(doc.kb_id)
+    else:
+        try:
+            store.delete(ref_doc_id=f"doc_{doc.id}")
+        except Exception as e:  # noqa: BLE001 - collection 不存在等情况不阻断删除
+            logger.warning("删除 Milvus 节点失败(可能集合为空): %s", e)
 
     # 2) 删落盘文件
     try:

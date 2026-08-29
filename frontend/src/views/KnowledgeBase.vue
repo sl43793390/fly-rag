@@ -102,7 +102,7 @@
           />
         </el-form-item>
         <el-form-item label="切分器" prop="splitter">
-          <el-select v-model="form.splitter" style="width: 100%">
+          <el-select v-model="form.splitter" :disabled="form.retrieval_mode === 'parent_child'" style="width: 100%">
             <el-option
               v-for="opt in SPLITTER_OPTIONS"
               :key="opt.value"
@@ -110,17 +110,24 @@
               :label="opt.label"
             />
           </el-select>
+          <span v-if="form.retrieval_mode === 'parent_child'" class="form-tip">
+            父子检索固定使用层级切分,切分器选项不生效
+          </span>
         </el-form-item>
         <el-form-item label="块大小" prop="chunk_size">
           <el-input-number v-model="form.chunk_size" :min="100" :max="8192" :step="128" />
-          <span class="form-tip">单个文本块的目标大小</span>
+          <span class="form-tip">
+            {{ form.retrieval_mode === 'parent_child'
+              ? '父子检索中为父块大小,中块/叶子按 1/4、1/16 自动推导'
+              : '单个文本块的目标大小' }}
+          </span>
         </el-form-item>
         <el-form-item label="重叠大小" prop="chunk_overlap">
           <el-input-number v-model="form.chunk_overlap" :min="0" :max="2048" :step="50" />
           <span class="form-tip">相邻块之间的重叠</span>
         </el-form-item>
         <el-form-item label="检索方式" prop="retrieval_mode">
-          <el-select v-model="form.retrieval_mode" style="width: 100%">
+          <el-select v-model="form.retrieval_mode" @change="onRetrievalModeChange" style="width: 100%">
             <el-option
               v-for="opt in RETRIEVAL_MODE_OPTIONS"
               :key="opt.value"
@@ -128,9 +135,13 @@
               :label="opt.label"
             />
           </el-select>
+          <div v-if="form.retrieval_mode === 'parent_child'" class="form-tip-block form-tip-info">
+            父子检索:文档按「父块(块大小)→ 中块(1/4)→ 叶子(1/16)」三层切分,
+            叶子入库参与向量检索,命中后自动合并为完整父块作为上下文。
+          </div>
           <div v-if="dialog.isEdit" class="form-tip-block">
-            注意:已有文档的知识库从向量检索切换到全文/混合检索时,
-            稀疏全文索引只对之后新上传的文档生效,建议重新上传文档。
+            注意:已有文档的知识库切换检索方式时,新策略仅对之后新上传的文档生效
+            (稀疏全文索引 / 父子层级结构需要重新构建),建议重新上传文档。
           </div>
         </el-form-item>
         <template v-if="form.retrieval_mode === 'hybrid'">
@@ -219,6 +230,22 @@ const rules = {
   chunk_size: [{ required: true, message: '请输入块大小', trigger: 'blur' }],
 }
 
+/** 切到父子检索前用户填写的块大小(切回其他检索方式时恢复) */
+let chunkSizeBeforePc = null
+
+/** 切换检索方式:父子检索自动把块大小调整为推荐值 2048(父/中/叶按 16:4:1 推导) */
+function onRetrievalModeChange(mode) {
+  if (mode === 'parent_child') {
+    if (form.chunk_size !== 2048) {
+      chunkSizeBeforePc = form.chunk_size
+      form.chunk_size = 2048
+    }
+  } else if (chunkSizeBeforePc !== null) {
+    form.chunk_size = chunkSizeBeforePc
+    chunkSizeBeforePc = null
+  }
+}
+
 /** 把表单状态转成后端 KbCreate / KbUpdate 结构(分离排序器参数) */
 function buildPayload() {
   const payload = {
@@ -271,6 +298,7 @@ function openCreate() {
 function openEdit(row) {
   dialog.isEdit = true
   dialog.editId = row.id
+  chunkSizeBeforePc = null
   const params = row.hybrid_ranker_params || {}
   Object.assign(form, {
     name: row.name,
@@ -376,5 +404,9 @@ onMounted(load)
   line-height: 1.5;
   color: #e6a23c;
   font-size: 12px;
+}
+
+.form-tip-info {
+  color: #409eff;
 }
 </style>

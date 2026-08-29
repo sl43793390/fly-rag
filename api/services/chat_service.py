@@ -227,13 +227,28 @@ class ChatService:
             # 关键:必须显式声明查询模式,否则 MilvusVectorStore 默认走纯稠密
             # 检索,BM25 稀疏通道完全不参与
             retriever_kwargs["vector_store_query_mode"] = mode
-        retriever = VectorStoreIndex.from_vector_store(
-            vector_store=get_store(kb_id)
-        ).as_retriever(**retriever_kwargs)
+        milvus_store = get_store(kb_id)
+        if mode == "parent_child":
+            # 父子检索(小 -> 大):Milvus 叶子向量命中后,每个命中从
+            # Docstore 回查完整父块(同父块去重),上下文更大更完整
+            from advancedSplitter.parent_child import build_parent_child_retriever
+            from api.services.docstore_cache import get_docstore
+
+            retriever = build_parent_child_retriever(
+                milvus_store=milvus_store,
+                docstore=get_docstore(kb_id),
+                similarity_top_k=CHAT.similarity_top_k,
+                verbose=CHAT.debug,
+            )
+        else:
+            retriever = VectorStoreIndex.from_vector_store(
+                vector_store=milvus_store
+            ).as_retriever(**retriever_kwargs)
         memory = ChatMemoryBuffer.from_defaults(
             chat_history=history, token_limit=CHAT.memory_token_limit
         )
-        # 分数量纲:dense 相似度(约 0~1)可用绝对阈值过滤;
+        # 分数量纲:dense 相似度(约 0~1)可用绝对阈值过滤(parent_child 走
+        # dense 通道,父块分数取命中子块中的最高分,同样适用);
         # sparse 的 BM25 原始分 / hybrid 的 RRF 融合分与相似度不同量纲,
         # 不适用绝对阈值,这两种模式下禁用 min_score,避免把全部结果误杀。
         min_score = CHAT.min_score or None

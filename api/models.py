@@ -38,12 +38,13 @@ class KnowledgeBase(Base):
     chunk_size = Column(Integer, nullable=False, default=1024, server_default="1024")
     chunk_overlap = Column(Integer, nullable=False, default=200, server_default="200")
     #: 检索方式: dense(仅向量) / sparse(仅 BM25 全文) / hybrid(稠密+BM25 融合)
+    #: / parent_child(父子检索:层级切分,叶子入 Milvus,父块入 Docstore 自动合并)
     retrieval_mode = Column(
         String(16),
         nullable=False,
         default="dense",
         server_default="dense",
-        comment="检索方式: dense/sparse/hybrid",
+        comment="检索方式: dense/sparse/hybrid/parent_child",
     )
     #: 融合排序器(retrieval_mode=hybrid 时生效): RRFRanker / WeightedRanker
     hybrid_ranker = Column(

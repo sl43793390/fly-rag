@@ -25,6 +25,13 @@ UPLOAD_DIR: str = os.environ.get("UPLOAD_DIR", "./uploads")
 MAX_UPLOAD_SIZE: int = int(os.environ.get("MAX_UPLOAD_SIZE", str(200 * 1024 * 1024)))
 
 # ------------------------------------------------------------
+# 父子检索(父子分块 + 小 -> 大父块回查)
+# ------------------------------------------------------------
+#: 父子检索 Docstore(父/中块节点)落盘根目录(按知识库子目录:
+#: docstores/kb_{id}/docstore.json),与 Milvus collection 生命周期一致
+DOCSTORE_DIR: str = os.environ.get("DOCSTORE_DIR", "./docstores")
+
+# ------------------------------------------------------------
 # 后台任务
 # ------------------------------------------------------------
 #: 文档解析/嵌入线程池大小。

@@ -53,6 +53,7 @@ export const RETRIEVAL_MODE_OPTIONS = [
   { value: 'dense', label: '向量检索(语义相似度)' },
   { value: 'sparse', label: '全文检索(BM25 关键词)' },
   { value: 'hybrid', label: '混合检索(向量 + BM25 融合)' },
+  { value: 'parent_child', label: '父子检索(小块命中,自动合并父块)' },
 ]
 
 export function retrievalModeLabel(v) {
@@ -62,12 +63,12 @@ export function retrievalModeLabel(v) {
 
 /** 检索方式标签颜色 */
 export function retrievalModeTag(v) {
-  return { dense: 'info', sparse: 'warning', hybrid: 'success' }[v] || 'info'
+  return { dense: 'info', sparse: 'warning', hybrid: 'success', parent_child: 'primary' }[v] || 'info'
 }
 
 /** 检索方式短标签(表格展示用) */
 export function retrievalModeShort(v) {
-  return { dense: '向量检索', sparse: '全文检索', hybrid: '混合检索' }[v] || v
+  return { dense: '向量检索', sparse: '全文检索', hybrid: '混合检索', parent_child: '父子检索' }[v] || v
 }
 
 /** 混合检索融合排序器(与 Milvus 保留值一致,大小写敏感) */

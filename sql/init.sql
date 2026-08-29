@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS knowledge_base (
   chunk_size      INT           NOT NULL DEFAULT 1024 COMMENT '切块大小',
   chunk_overlap   INT           NOT NULL DEFAULT 200 COMMENT '相邻块重叠',
   retrieval_mode  VARCHAR(16)   NOT NULL DEFAULT 'dense'
-                  COMMENT '检索方式: dense(向量)/sparse(BM25 全文)/hybrid(融合)',
+                  COMMENT '检索方式: dense(向量)/sparse(BM25 全文)/hybrid(融合)/parent_child(父子检索)',
   hybrid_ranker   VARCHAR(16)   NULL COMMENT '混合检索融合排序: RRFRanker/WeightedRanker(hybrid 时生效)',
   hybrid_ranker_params JSON     NULL COMMENT '融合排序参数: RRF -> {k:60}; Weighted -> {weights:[1.0,1.0]}',
   created_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -246,6 +246,6 @@ ON DUPLICATE KEY UPDATE role_id = role_id;
 -- chat_message 增加 is_summary
 --   ALTER TABLE chat_message ADD COLUMN is_summary TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否为压缩摘要消息';
 -- knowledge_base 增加检索配置字段(老库没有这三列,后端启动时也会自动补齐)
---   ALTER TABLE knowledge_base ADD COLUMN retrieval_mode VARCHAR(16) NOT NULL DEFAULT 'dense' COMMENT '检索方式: dense/sparse/hybrid';
+--   ALTER TABLE knowledge_base ADD COLUMN retrieval_mode VARCHAR(16) NOT NULL DEFAULT 'dense' COMMENT '检索方式: dense/sparse/hybrid/parent_child';
 --   ALTER TABLE knowledge_base ADD COLUMN hybrid_ranker VARCHAR(16) NULL COMMENT '混合检索融合排序: RRFRanker/WeightedRanker';
 --   ALTER TABLE knowledge_base ADD COLUMN hybrid_ranker_params JSON NULL COMMENT '融合排序参数';

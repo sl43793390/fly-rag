@@ -128,7 +128,7 @@ class MilvusConfig:
     # ---------- 3. 索引与度量 ----------
     #: 稠密向量相似度度量类型: IP(内积) / COSINE(余弦) / L2(欧氏)。
     #: 使用 OpenAI 兼容 embedding 时 COSINE 更通用;为兼容历史 collection 默认 IP。
-    similarity_metric: str = field(default_factory=lambda: _env("MILVUS_SIMILARITY_METRIC", "IP"))
+    similarity_metric: str = field(default_factory=lambda: _env("MILVUS_SIMILARITY_METRIC", "COSINE"))
     #: 稠密向量索引类型: FLAT / AUTOINDEX / HNSW / IVF_FLAT / DISKANN 等。
     index_type: str = field(default_factory=lambda: _env("MILVUS_INDEX_TYPE", "FLAT"))
     #: 稠密索引构建参数(随 index_type 变化):
@@ -184,7 +184,7 @@ class ChatConfig:
     #: 对话历史 token 上限(超过会被裁剪)。
     memory_token_limit: int = field(default_factory=lambda: int(_env("MEMORY_TOKEN_LIMIT", "3000")))
     #: 是否开启 RAG 全链路调试日志(打印检索节点、提示词、模型响应)。
-    debug: bool = field(default_factory=lambda: _env("RAG_DEBUG", "false").lower() == "true")
+    debug: bool = field(default_factory=lambda: _env("RAG_DEBUG", "false").lower() == "fasle")
     #: 调试打印时,单段文本的截断长度(字符数)。
     debug_text_limit: int = field(default_factory=lambda: int(_env("RAG_DEBUG_TEXT_LIMIT", "800")))
     #: 对话明细日志开关:按阶段打印 ①前端用户消息 ②Milvus 检索结果
@@ -192,7 +192,7 @@ class ChatConfig:
     #: 各阶段以横线分隔,便于排查"提示词是否生效 / 检索是否命中"等问题。
     #: 环境变量 CHAT_LOG_DETAIL=false 可关闭。
     log_chat_detail: bool = field(
-        default_factory=lambda: _env("CHAT_LOG_DETAIL", "true").lower() == "false"
+        default_factory=lambda: _env("CHAT_LOG_DETAIL", "true").lower() == "true"
     )
 
 

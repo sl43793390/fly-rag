@@ -4,7 +4,7 @@ api.routers.chat
 对话 API:会话管理 + RAG / 纯 LLM 问答。
 
 - 会话可归属某个知识库(mode=rag),也可不挂知识库(mode=chat,纯 LLM);
-- 已登录用户(可选鉴权)的会话绑定到 ``owner_id``,下次登录仍可见;
+- 全部接口强制登录,会话绑定到当前登录用户 ``owner_id``,下次登录仍可见;
 - 历史消息持久化 MySQL,服务重启后自动恢复;
 - RAG 回答附带引用来源(sources: text / score / file_name);
 - 历史超过 30 轮自动压缩(详见 chat_service)。
@@ -28,10 +28,15 @@ from api.schemas import (
     SessionOut,
 )
 from api.services.chat_service import chat_service
-from api.user.auth import get_optional_user
+from api.user.auth import get_current_user
 from api.user.models import User
 
-router = APIRouter(prefix="/api/chat", tags=["对话"])
+#: 全组路由强制登录(会话 / 消息 / 对话均需有效 token)
+router = APIRouter(
+    prefix="/api/chat",
+    tags=["对话"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 # ============================================================
@@ -72,11 +77,11 @@ def list_sessions(
     owner_id: int | None = None,
     include_anonymous: bool = True,
     db: Session = Depends(get_db),
-    user: User | None = Depends(get_optional_user),
+    user: User = Depends(get_current_user),
 ):
     """
-    - 未指定 owner_id 时,若已登录则按当前用户过滤;否则返回匿名会话;
-    - ``include_anonymous=true`` 时,匿名会话也一并返回(默认 true)。
+    - 未指定 owner_id 时按当前登录用户过滤;
+    - ``include_anonymous=true`` 时,历史匿名会话(owner 为空)也一并返回(默认 true)。
     """
     owner = owner_id if owner_id is not None else _resolve_owner(user)
     q = db.query(ChatSession, KnowledgeBase.name).outerjoin(
@@ -115,7 +120,7 @@ def list_sessions(
 def create_session(
     payload: SessionCreate,
     db: Session = Depends(get_db),
-    user: User | None = Depends(get_optional_user),
+    user: User = Depends(get_current_user),
 ):
     owner = _resolve_owner(user)
 

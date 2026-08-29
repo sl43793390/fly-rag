@@ -14,11 +14,13 @@
 **核心特性**:
 - **多格式解析** —— Word/Excel/PDF/MD/HTML/JSON/Web,以及通过 anydoc 支持 PPT/RTF/EPUB/CSV 等更多格式
 - **多种切分器** —— 句子、Token、Markdown、HTML、JSON、代码、语义切分
+- **父子检索** —— 层级三段切分,叶子小块入 Milvus 精准命中,自动回查完整父块作为上下文(小 → 大)
 - **Milvus 持久化** —— 嵌入式(零依赖)与集群模式皆可
-- **混合检索** —— 基于 Milvus 2.5 内置 BM25 Function 的全文/混合检索(免训练稀疏模型),知识库级可配置 dense / sparse / hybrid 三种检索方式与融合排序参数
+- **混合检索** —— 基于 Milvus 2.5 内置 BM25 Function 的全文/混合检索(免训练稀疏模型),知识库级可配置 dense / sparse / hybrid / parent_child 四种检索方式与融合排序参数
 - **OpenAI 兼容 LLM** —— 支持 DeepSeek / 通义千问 / Ollama / vLLM / dmxapi 等
 - **两种对话模式** —— 多轮问题改写(Condense)与原文直接检索(自实现引擎)
 - **Web 界面** —— FastAPI + Vue3 前端，支持多知识库管理、批量文档上传、RAG 对话、Markdown 渲染回答
+- **登录与 RBAC** —— JWT 登录认证 + 角色/权限管理,业务接口统一强制登录
 - **全链路 Debug 日志** —— 系统提示词 / 检索节点 / LLM prompt / 模型返回 一键打印
 - **三档配置优先级** —— 调用参数 > `config.py` > 环境变量
 
@@ -212,10 +214,14 @@ npm run dev
 ### 5.1 知识库管理
 
 - **创建知识库**:指定名称、描述、切分器类型、chunk 参数、**检索方式**
-- **检索方式**:向量检索(dense) / 全文检索(sparse, BM25 关键词) / 混合检索(hybrid, 向量+BM25 融合);hybrid 可选 RRF 或加权融合排序并调整参数
+- **检索方式**:
+  - 向量检索(dense):纯语义相似度,通用推荐
+  - 全文检索(sparse):Milvus 2.5 BM25 关键词精确匹配
+  - 混合检索(hybrid):向量 + BM25 双路召回,可选 RRF 或加权融合排序
+  - **父子检索(parent_child)**:层级三段切分(父块=块大小 / 中块=1/4 / 叶子=1/16),叶子小块入 Milvus 检索,命中后自动回查完整父块作为上下文;切分器选项不生效
 - **编辑/删除**:修改配置或删除知识库(连带 Milvus 数据)
 - **多知识库隔离**:每个知识库对应独立的 Milvus collection(`kb_{id}`)
-- **注意**:已有文档的知识库切换检索方式时,稀疏全文索引仅对之后新上传的文档生效(Milvus 不支持对已有 collection 追加稀疏字段),建议重新上传文档
+- **注意**:已有文档的知识库切换检索方式时,新策略仅对之后新上传的文档生效(稀疏全文索引 / 父子层级结构需要重新构建),建议重新上传文档
 
 ### 5.2 文档管理
 
@@ -292,6 +298,7 @@ set ENABLE_QUESTION_REWRITING=false
 | `dense`(默认) | 纯向量语义检索 | 语义理解、同义改写 |
 | `sparse` | Milvus 2.5 内置 BM25 Function 全文检索,服务端分词生成稀疏向量 | 关键词精确匹配(型号/错误码/命令) |
 | `hybrid` | 向量 + BM25 双路召回,融合排序 | 兼顾语义与关键词,通用推荐 |
+| `parent_child` | 父子检索:层级切分(父:中:叶 = 16:4:1),叶子入 Milvus 向量检索,命中后回查顶层父块 | 长文档/章节结构,需要"小块命中准 + 大块上下文全" |
 
 **实现要点**:
 
@@ -300,6 +307,14 @@ set ENABLE_QUESTION_REWRITING=false
 - 融合排序:`RRFRanker`(对量纲不敏感,推荐,参数 `k`)或 `WeightedRanker`(参数 `weights`,稠密在前稀疏在后)
 - hybrid/sparse 模式下 RRF/BM25 分数量纲不适用绝对阈值,对话引擎自动禁用 `min_score`
 - **schema 变更限制**:Milvus 不支持对已有 collection 增删字段,检索方式切换需重建 collection(重新上传文档)
+
+**父子检索(parent_child)实现细节**(代码见 `advancedSplitter/parent_child.py`):
+
+- **层级切分**:`HierarchicalNodeParser` 按 父块=块大小 / 中块=1/4 / 叶子=1/16 三层切分(块大小 2048 → 2048/512/128),知识库的"块大小"即父块大小
+- **双存储入库**:全部层级节点存入 Docstore(`DOCSTORE_DIR/kb_{id}/docstore.json`,父块供回查);**仅叶子节点** Embedding 后入 Milvus(父块零 Embedding 开销、不污染检索结果)
+- **检索(小 → 大)**:`ParentLookupRetriever` 先在 Milvus 检索叶子块,每个命中沿 PARENT 关系回查完整顶层父块,同一父块的多个命中自动去重
+- **按文档删除**:全部层级节点的 `ref_doc_id` 统一指向原始文档,删文档时 Milvus 叶子与 Docstore 父块一并清除
+- **降级**:Docstore 缺失父块(如普通切分入库后切换为父子检索的旧文档)时保留叶子结果,检索不中断
 
 **常用环境变量**(完整见 `config.py` 的 `MilvusConfig`,共 20+ 项):
 
@@ -345,6 +360,15 @@ pip install sentence-transformers
 
 **Q8. 切换检索方式后旧文档搜不到?**
 Milvus 不支持对已有 collection 追加稀疏字段,稀疏全文索引只对新上传文档生效。请在知识库编辑中切换检索方式后**重新上传文档**(或删除重建知识库)。
+
+**Q9. 父子检索(parent_child)怎么配置效果最好?**
+- **块大小选 2048**(即父块大小,中块/叶子按 1/4、1/16 自动推导为 512/128):叶子 128 是检索精度与语义信息量的平衡点;切分器选项在父子检索下不生效
+- 重叠大小会自动按叶子大小封顶(`min(重叠, 叶子/4)`),保持默认即可
+- 父子检索数据存两处:Milvus collection(叶子)+ `docstores/kb_{id}/`(父块 Docstore),删除知识库时一并清理
+- 从普通检索切换为父子检索时,旧文档无层级结构会退化为普通叶子检索,建议重新上传
+
+**Q10. 服务重启后为什么要重新登录?**
+后端 JWT 签名密钥默认随服务重启随机生成(旧 token 立即失效);同时所有业务接口强制登录校验,前端路由守卫会在进入页面前用 `/auth/me` 校验 token,失效自动登出跳转登录页。若需跨重启保持会话,设置环境变量 `AUTH_JWT_SECRET`(固定值即可)。
 
 ---
 

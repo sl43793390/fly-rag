@@ -15,9 +15,10 @@
 - **多格式解析** —— Word/Excel/PDF/MD/HTML/JSON/Web,以及通过 anydoc 支持 PPT/RTF/EPUB/CSV 等更多格式
 - **多种切分器** —— 句子、Token、Markdown、HTML、JSON、代码、语义切分
 - **Milvus 持久化** —— 嵌入式(零依赖)与集群模式皆可
+- **混合检索** —— 基于 Milvus 2.5 内置 BM25 Function 的全文/混合检索(免训练稀疏模型),知识库级可配置 dense / sparse / hybrid 三种检索方式与融合排序参数
 - **OpenAI 兼容 LLM** —— 支持 DeepSeek / 通义千问 / Ollama / vLLM / dmxapi 等
 - **两种对话模式** —— 多轮问题改写(Condense)与原文直接检索(自实现引擎)
-- **Web 界面** —— FastAPI + Vue3 前端，支持多知识库管理、批量文档上传、RAG 对话
+- **Web 界面** —— FastAPI + Vue3 前端，支持多知识库管理、批量文档上传、RAG 对话、Markdown 渲染回答
 - **全链路 Debug 日志** —— 系统提示词 / 检索节点 / LLM prompt / 模型返回 一键打印
 - **三档配置优先级** —— 调用参数 > `config.py` > 环境变量
 
@@ -66,6 +67,10 @@ api/ (FastAPI)                            REST 服务
 ```
 
 ---
+![](assets/知识库.png)
+![](assets/chat.png)
+![](assets/ragas.png)
+
 
 ## 3. 快速开始
 
@@ -101,6 +106,12 @@ set EMBED_DIM=1536
 set MILVUS_URI=./milvus_llamaindex.db
 set MILVUS_COLLECTION=llamaindex_rag
 set MILVUS_OVERWRITE=true
+
+# 混合检索(BM25 全文检索,可全部省略使用默认值)
+set MILVUS_ENABLE_HYBRID=true          # 建表带稀疏字段 + BM25 Function
+set MILVUS_ANALYZER_TYPE=jieba         # BM25 分词器(milvus-lite 仅支持 standard/jieba)
+set MILVUS_HYBRID_RANKER=RRFRanker     # 融合排序: RRFRanker / WeightedRanker
+set MILVUS_HYBRID_RANKER_PARAMS={"k":60}   # WeightedRanker 用 {"weights":[1.0,1.0]}
 
 # MySQL(用于 Web 界面)
 set MYSQL_HOST=127.0.0.1
@@ -178,12 +189,21 @@ npm run dev
 | 函数 | 说明 |
 |---|---|
 | `configure_settings(embed_model, llm, chunk_size, chunk_overlap)` | 全局注册配置 |
-| `build_milvus_store(collection_name, overwrite)` | 构造 Milvus 客户端 |
+| `build_milvus_store(collection_name, dim, overwrite, enable_hybrid, hybrid_ranker, hybrid_ranker_params, ...)` | 构造 Milvus 客户端;`enable_hybrid=True` 时建表带稀疏字段 + BM25 Function |
 | `create_index(nodes, milvus_store)` | 写入 Milvus 并构建索引 |
 | `load_existing_index(milvus_store)` | 加载已存在的 collection |
 | `build_chat_engine(index, enable_question_rewriting, debug)` | 构造对话引擎 |
 | `CustomRAGChatEngine` | 自实现的 Chat Engine |
 | `RAGDebugHandler` | 全链路日志回调 |
+
+### 4.4 `hybridRetriever` — 混合检索
+
+| 函数/类 | 说明 |
+|---|---|
+| `build_milvus_hybrid_store(collection_name, dim, enable_hybrid, hybrid_ranker, ...)` | 构建带 BM25 Function 的 Milvus store(委托 `build_milvus_store`) |
+| `MilvusHybridRetriever(index, similarity_top_k, mode, ...)` | 检索器;`mode` ∈ `dense` / `sparse` / `hybrid`,hybrid/sparse 显式注入 `vector_store_query_mode` |
+
+> 混合检索原理与注意事项见 [第 6.4 节](#64-milvus-检索配置)。
 
 ---
 
@@ -191,9 +211,11 @@ npm run dev
 
 ### 5.1 知识库管理
 
-- **创建知识库**:指定名称、描述、切分器类型、chunk 参数
+- **创建知识库**:指定名称、描述、切分器类型、chunk 参数、**检索方式**
+- **检索方式**:向量检索(dense) / 全文检索(sparse, BM25 关键词) / 混合检索(hybrid, 向量+BM25 融合);hybrid 可选 RRF 或加权融合排序并调整参数
 - **编辑/删除**:修改配置或删除知识库(连带 Milvus 数据)
 - **多知识库隔离**:每个知识库对应独立的 Milvus collection(`kb_{id}`)
+- **注意**:已有文档的知识库切换检索方式时,稀疏全文索引仅对之后新上传的文档生效(Milvus 不支持对已有 collection 追加稀疏字段),建议重新上传文档
 
 ### 5.2 文档管理
 
@@ -205,9 +227,11 @@ npm run dev
 
 ### 5.3 RAG 对话
 
-- **会话管理**:每个知识库可创建多个独立会话
+- **会话管理**:每个知识库可创建多个独立会话,也支持不绑定知识库的纯 LLM 对话
 - **RAG 引用**:回答附带引用来源(文本、相似度分数、文件名)
-- **历史持久化**:MySQL 存储,服务重启后自动恢复
+- **Markdown 渲染**:AI 回复支持标题/列表/表格/代码块/引用块等 Markdown 格式(用户消息保持纯文本)
+- **历史持久化**:MySQL 存储,服务重启后自动恢复;超过 30 轮自动压缩为摘要
+- **消息操作**:复制 / 重试 / 保存为提示词模版
 - **清空会话**:一键清空历史消息
 
 ### 5.4 API 接口一览
@@ -259,6 +283,36 @@ set ENABLE_QUESTION_REWRITING=false
 
 > `EMBED_DIM` 必须与 Embedding 模型匹配(OpenAI `text-embedding-3-small` = 1536)。
 
+### 6.4 Milvus 检索配置
+
+每个知识库可独立选择检索方式(建库时在 Web 界面选择,存于 MySQL,也可通过环境变量设默认值):
+
+| 检索方式 | 原理 | 适用场景 |
+|---|---|---|
+| `dense`(默认) | 纯向量语义检索 | 语义理解、同义改写 |
+| `sparse` | Milvus 2.5 内置 BM25 Function 全文检索,服务端分词生成稀疏向量 | 关键词精确匹配(型号/错误码/命令) |
+| `hybrid` | 向量 + BM25 双路召回,融合排序 | 兼顾语义与关键词,通用推荐 |
+
+**实现要点**:
+
+- BM25 稀疏向量由 **Milvus 服务端**在写入时自动生成(建表声明 `BM25BuiltInFunction`),客户端无需稀疏模型
+- 中文分词:`MILVUS_ANALYZER_TYPE=jieba`(milvus-lite 仅支持 `standard`/`jieba`;Docker 版 Milvus 2.5+ 还支持 `chinese`)
+- 融合排序:`RRFRanker`(对量纲不敏感,推荐,参数 `k`)或 `WeightedRanker`(参数 `weights`,稠密在前稀疏在后)
+- hybrid/sparse 模式下 RRF/BM25 分数量纲不适用绝对阈值,对话引擎自动禁用 `min_score`
+- **schema 变更限制**:Milvus 不支持对已有 collection 增删字段,检索方式切换需重建 collection(重新上传文档)
+
+**常用环境变量**(完整见 `config.py` 的 `MilvusConfig`,共 20+ 项):
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `MILVUS_SIMILARITY_METRIC` | IP | 稠密度量: IP / COSINE / L2 |
+| `MILVUS_INDEX_TYPE` | FLAT | 稠密索引: FLAT / HNSW / IVF_FLAT 等 |
+| `MILVUS_ENABLE_HYBRID` | true | 建表是否带稀疏字段 + BM25 Function |
+| `MILVUS_ANALYZER_TYPE` | jieba | BM25 分词器类型 |
+| `MILVUS_HYBRID_RANKER` | RRFRanker | 融合排序器(大小写敏感) |
+| `MILVUS_HYBRID_RANKER_PARAMS` | {"k":60} | 排序器参数(JSON) |
+| `MILVUS_ENABLE_DYNAMIC_FIELD` | true | 是否允许动态字段 |
+
 ---
 
 ## 7. 常见问题
@@ -285,6 +339,12 @@ pip install sentence-transformers
 
 **Q6. MySQL 连接失败?**
 确认 MySQL 服务已启动,且 `sql/init.sql` 已执行。可用环境变量覆盖连接配置。
+
+**Q7. 报错 `unknown tokenizer type: 'chinese' (supported: 'standard', 'jieba')`?**
+当前 Milvus 服务端不支持 `chinese` 分词器(milvus-lite 仅支持 standard/jieba)。保持默认 `MILVUS_ANALYZER_TYPE=jieba` 即可;jieba 同样是中文词典分词,效果相当。Docker 版 Milvus 2.5+ 才支持 `chinese`。
+
+**Q8. 切换检索方式后旧文档搜不到?**
+Milvus 不支持对已有 collection 追加稀疏字段,稀疏全文索引只对新上传文档生效。请在知识库编辑中切换检索方式后**重新上传文档**(或删除重建知识库)。
 
 ---
 
@@ -320,19 +380,19 @@ llamaindex-loader/
 │
 ├── dataLoader/               # 文档解析
 ├── spliter/                  # 文档切分
-├── vectorStore/              # 向量存储 + 对话
-├── hybridRetriever/          # 混合检索
+├── vectorStore/              # 向量存储 + 对话(BM25 Function 混合模式)
+├── hybridRetriever/          # 混合检索(dense/sparse/hybrid 检索器与 Demo)
 ├── ragasEvaluator/           # RAGAS 评测
 │
 ├── api/                      # FastAPI 后端
 │   ├── main.py               #   应用入口
 │   ├── routers/              #   路由(kb/documents/chat)
-│   ├── services/             #   业务逻辑(解析/对话)
-│   ├── models.py             #   ORM 模型
-│   └── database.py           #   数据库连接
+│   ├── services/             #   业务逻辑(解析/对话/store 缓存与检索配置)
+│   ├── models.py             #   ORM 模型(含 retrieval_mode 等检索配置字段)
+│   └── database.py           #   数据库连接(含幂等 schema 升级)
 │
 └── frontend/                 # Vue3 前端
-    ├── src/views/            #   页面组件
+    ├── src/views/            #   页面组件(知识库创建支持检索方式选择)
     ├── src/api/              #   API 封装
     └── package.json          #   前端依赖
 ```

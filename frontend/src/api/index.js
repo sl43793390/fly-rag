@@ -201,6 +201,15 @@ export const chatApi = {
         const data = await resp.json()
         if (data?.detail) msg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
       } catch { /* 非 JSON 错误体,忽略 */ }
+      // 与 axios 拦截器一致:401 清登录态并跳登录页(如服务重启后 token 失效)
+      if (resp.status === 401) {
+        clearAuth()
+        if (location.pathname !== '/login') {
+          ElMessage.error('登录已失效,请重新登录')
+          location.href = `/login?redirect=${encodeURIComponent(location.pathname + location.search)}`
+          throw new Error('登录已失效')
+        }
+      }
       if (handlers.onError) handlers.onError(msg)
       throw new Error(msg)
     }

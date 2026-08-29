@@ -3,7 +3,7 @@
     <el-card class="login-card" shadow="always">
       <div class="login-title">
         <el-icon :size="26" color="#409eff"><Collection /></el-icon>
-        <span>知识库 RAG 平台</span>
+        <span>知识库 fly-RAG 平台</span>
       </div>
       <p class="login-sub">登录后即可使用对话并保留历史</p>
       <el-form ref="formRef" :model="form" :rules="rules" label-width="0" @submit.prevent>
@@ -39,7 +39,7 @@
           登录
         </el-button>
       </el-form>
-      <p class="login-hint">默认管理员:admin / admin123</p>
+      <p class="login-hint"></p>
     </el-card>
   </div>
 </template>

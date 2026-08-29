@@ -38,6 +38,17 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+          <!-- 用户名右侧:一键退出系统按钮 -->
+          <el-tooltip content="退出系统" placement="bottom">
+            <el-button
+              class="logout-btn"
+              :icon="SwitchButton"
+              circle
+              text
+              type="danger"
+              @click="onLogout"
+            />
+          </el-tooltip>
         </template>
         <el-button v-else type="primary" plain size="small" @click="$router.push('/login')">
           登录
@@ -74,7 +85,7 @@
 import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowDown, Collection, User } from '@element-plus/icons-vue'
+import { ArrowDown, Collection, SwitchButton, User } from '@element-plus/icons-vue'
 import { authStore as auth } from './store/auth'
 import { authApi } from './api'
 
@@ -107,11 +118,16 @@ const pwdRules = {
   ],
 }
 
+/** 退出登录:清登录态并回登录页(下拉菜单与用户名右侧按钮共用) */
+function onLogout() {
+  auth.logout()
+  ElMessage.success('已退出登录')
+  router.push('/login')
+}
+
 function onUserCommand(cmd) {
   if (cmd === 'logout') {
-    auth.logout()
-    ElMessage.success('已退出登录')
-    router.push('/login')
+    onLogout()
   } else if (cmd === 'changePwd') {
     Object.assign(pwdForm, { old: '', new: '', confirm: '' })
     pwdDialog.visible = true
@@ -198,6 +214,12 @@ body,
 .header-right {
   display: flex;
   align-items: center;
+  gap: 6px;
+}
+
+/* 用户名右侧退出按钮:与用户名保持小间距 */
+.logout-btn {
+  margin-left: 2px;
 }
 
 .user-chip {

@@ -28,11 +28,10 @@ from api.user.models import User
 # ------------------------------------------------------------
 # 配置(可通过环境变量覆盖)
 # ------------------------------------------------------------
-#: HS256 签名密钥,缺省从环境变量取,没有则用机器级随机量(进程重启即失效,
-#: 仅用于本地开发)。生产请显式设置 AUTH_JWT_SECRET。
-_JWT_SECRET: str = os.environ.get(
-    "AUTH_JWT_SECRET", "kb-rag-default-secret-change-me-in-production"
-)
+#: HS256 签名密钥:显式设置 AUTH_JWT_SECRET 时跨重启保持会话有效;
+#: 未设置则每次进程启动用机器级随机量(重启服务后所有旧 token 立即失效,
+#: 前端 401 自动跳转登录页,即"每次重启服务必须重新登录")。
+_JWT_SECRET: str = os.environ.get("AUTH_JWT_SECRET") or os.urandom(32).hex()
 #: Token 有效期(秒),默认 12 小时。
 _JWT_EXPIRES: int = int(os.environ.get("AUTH_JWT_EXPIRES", str(12 * 3600)))
 #: pbkdf2 迭代轮数

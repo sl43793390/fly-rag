@@ -6,7 +6,7 @@ from llama_index.core.agent.workflow import FunctionAgent
 
 client = OpenAI(
     model_name="deepseek-v4-flash-0731",
-    api_key="sk-jXUqP7ZDLe04UyydraigPomfC4TQPZmCz7MwLcRLKBVjHrQJ",
+    api_key="sk-",
     api_base="https://www.dmxapi.cn/v1",
 )
 # response = client.complete("你好")
